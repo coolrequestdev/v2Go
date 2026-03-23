@@ -1542,6 +1542,21 @@ class _RoutingSelectorButtonState extends State<RoutingSelectorButton> {
   void initState() {
     super.initState();
     _loadUserRules();
+    _restoreCustomRule();
+  }
+
+  Future<void> _restoreCustomRule() async {
+    final settings = AppSettingsManager();
+    if (settings.routingMode == RoutingMode.custom && settings.customRuleId != null) {
+      final rows = await DatabaseHelper().getAllRoutingRules();
+      final match = rows.cast<Map<String, dynamic>?>().firstWhere(
+        (r) => r!['id'] == settings.customRuleId,
+        orElse: () => null,
+      );
+      if (match != null && mounted) {
+        setState(() => _selectedUserRuleName = match['name'] as String);
+      }
+    }
   }
 
   Future<void> _loadUserRules() async {
@@ -1557,11 +1572,13 @@ class _RoutingSelectorButtonState extends State<RoutingSelectorButton> {
         return Icons.public_rounded;
       case RoutingMode.direct:
         return Icons.link_rounded;
+      case RoutingMode.custom:
+        return Icons.tune_rounded;
     }
   }
 
   PopupMenuItem<String> _buildBuiltinItem(RoutingMode mode, bool isDark) {
-    final isSelected = mode == widget.currentMode;
+    final isSelected = mode == widget.currentMode && widget.currentMode != RoutingMode.custom;
     return PopupMenuItem<String>(
       value: 'builtin:${mode.name}',
       child: Row(
@@ -1621,6 +1638,8 @@ class _RoutingSelectorButtonState extends State<RoutingSelectorButton> {
       Map<String, dynamic> row, bool isDark) {
     final id = row['id'] as int;
     final name = row['name'] as String;
+    final isSelected = AppSettingsManager().routingMode == RoutingMode.custom &&
+        AppSettingsManager().customRuleId == id;
     return PopupMenuItem<String>(
       value: 'user:$id',
       child: Row(
@@ -1630,24 +1649,33 @@ class _RoutingSelectorButtonState extends State<RoutingSelectorButton> {
             height: 28,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: isDark ? const Color(0xFF3C3F41) : Colors.grey.shade200,
+              color: isSelected
+                  ? Colors.orange.shade600.withOpacity(0.15)
+                  : (isDark ? const Color(0xFF3C3F41) : Colors.grey.shade200),
             ),
             alignment: Alignment.center,
             child: Icon(Icons.tune_rounded,
                 size: 14,
-                color: isDark
-                    ? Colors.white.withOpacity(0.7)
-                    : Colors.black.withOpacity(0.6)),
+                color: isSelected
+                    ? Colors.orange.shade600
+                    : (isDark
+                        ? Colors.white.withOpacity(0.7)
+                        : Colors.black.withOpacity(0.6))),
           ),
           const SizedBox(width: 12),
           Expanded(
             child: Text(name,
                 style: TextStyle(
                     fontSize: 13,
-                    color: isDark
-                        ? Colors.white.withOpacity(0.9)
-                        : Colors.black.withOpacity(0.8))),
+                    fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                    color: isSelected
+                        ? Colors.orange.shade600
+                        : (isDark
+                            ? Colors.white.withOpacity(0.9)
+                            : Colors.black.withOpacity(0.8)))),
           ),
+          if (isSelected)
+            Icon(Icons.check_rounded, size: 16, color: Colors.orange.shade600),
         ],
       ),
     );
@@ -1695,7 +1723,8 @@ class _RoutingSelectorButtonState extends State<RoutingSelectorButton> {
       final id = int.parse(value.substring('user:'.length));
       final row = _userRules.firstWhere((r) => r['id'] == id);
       setState(() => _selectedUserRuleName = row['name'] as String);
-      widget.onModeChanged(RoutingMode.rule);
+      await AppSettingsManager().setCustomRule(id);
+      widget.onModeChanged(RoutingMode.custom);
     }
   }
 

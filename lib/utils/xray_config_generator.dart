@@ -11,7 +11,15 @@ class XrayConfigGenerator {
   /// 生成完整的 Xray 配置（异步，包含用户路由规则）
   static Future<Map<String, dynamic>> generateFullConfig(
       V2RayConfig v2rayConfig) async {
-    final userRules = await DatabaseHelper().getAllRoutingRules();
+    final settings = AppSettingsManager();
+    final mode = settings.routingMode;
+    List<Map<String, dynamic>> userRules;
+    if (mode == RoutingMode.custom && settings.customRuleId != null) {
+      final rule = await DatabaseHelper().getRoutingRuleWithEntries(settings.customRuleId!);
+      userRules = rule != null ? [rule] : [];
+    } else {
+      userRules = [];
+    }
     final v2rayConfigJson = v2rayConfig.toJson();
     v2rayConfigJson["tag"] = "proxy";
     return {
@@ -30,7 +38,7 @@ class XrayConfigGenerator {
       'policy': generatorPolicy(),
       'inbounds': [_generateInboundConfig().toJson(), generatorSta()],
       'outbounds': [v2rayConfigJson, _generateDirectOutbound().toJson()],
-      'routing': _generateRoutingConfig(userRules, AppSettingsManager().routingMode).toJson(),
+      'routing': _generateRoutingConfig(userRules, mode).toJson(),
     };
   }
 
@@ -193,7 +201,6 @@ class XrayConfigGenerator {
   /// 生成路由配置（含用户自定义规则）
   static RoutingConfig _generateRoutingConfig(
       List<Map<String, dynamic>> userRules, RoutingMode mode) {
-        print(mode);
     // 全局直连：所有流量直连
     if (mode == RoutingMode.direct) {
       return RoutingConfig(
@@ -216,68 +223,61 @@ class XrayConfigGenerator {
       );
     }
 
-    // 规则分流：用户规则 + 内置规则
-    final userRoutingRules = <RoutingRule>[];
-    for (final rule in userRules) {
-      final entries =
-          rule['entries'] as List<Map<String, dynamic>>? ?? [];
-      final proxyIps = <String>[];
-      final proxyDomains = <String>[];
-      final proxyProcesses = <String>[];
-      final directIps = <String>[];
-      final directDomains = <String>[];
-      final directProcesses = <String>[];
+    // 自定义规则：用户指定的单条规则 + 根据 inheritFrom 决定兜底行为
+    if (mode == RoutingMode.custom) {
+      final userRoutingRules = _parseUserRoutingRules(userRules);
+      final inheritFrom = userRules.isNotEmpty
+          ? (userRules.first['inherit_from'] as String? ?? 'auto')
+          : 'auto';
 
-      for (final entry in entries) {
-        final isProxy = (entry['action'] as String) == 'proxy';
-        final matchType = entry['match_type'] as String;
-        final value = entry['value'] as String;
-
-        if (matchType == 'appName') {
-          if (isProxy) proxyProcesses.add(value); else directProcesses.add(value);
-        } else if (matchType == 'ip') {
-          if (isProxy) proxyIps.add(value); else directIps.add(value);
-        } else {
-          if (isProxy) proxyDomains.add(value); else directDomains.add(value);
-        }
-      }
-
-      if (proxyProcesses.isNotEmpty) {
-        userRoutingRules.add(RoutingRule(
-            type: 'field', process: proxyProcesses, outboundTag: 'proxy'));
-      }
-      if (proxyDomains.isNotEmpty) {
-        userRoutingRules.add(RoutingRule(
-            type: 'field',
-            domain: proxyDomains,
-            outboundTag: 'proxy'));
-      }
-      if (proxyIps.isNotEmpty) {
-        userRoutingRules.add(RoutingRule(
-            type: 'field', ip: proxyIps, outboundTag: 'proxy'));
-      }
-      if (directProcesses.isNotEmpty) {
-        userRoutingRules.add(RoutingRule(
-            type: 'field', process: directProcesses, outboundTag: 'direct-out'));
-      }
-      if (directDomains.isNotEmpty) {
-        userRoutingRules.add(RoutingRule(
-            type: 'field',
-            domain: directDomains,
-            outboundTag: 'direct-out'));
-      }
-      if (directIps.isNotEmpty) {
-        userRoutingRules.add(RoutingRule(
-            type: 'field', ip: directIps, outboundTag: 'direct-out'));
+      if (inheritFrom == 'globalDirect') {
+        return RoutingConfig(
+          domainStrategy: 'AsIs',
+          rules: [
+            RoutingRule(type: "field", outboundTag: "api", inboundTag: "api"),
+            ...userRoutingRules,
+            RoutingRule(type: 'field', port: '0-65535', outboundTag: 'direct-out'),
+          ],
+        );
+      } else if (inheritFrom == 'globalProxy') {
+        return RoutingConfig(
+          domainStrategy: 'AsIs',
+          rules: [
+            RoutingRule(type: "field", outboundTag: "api", inboundTag: "api"),
+            ...userRoutingRules,
+            RoutingRule(type: 'field', port: '0-65535', outboundTag: 'proxy'),
+          ],
+        );
+      } else {
+        // auto：用户规则优先，兜底走内置规则分流
+        return RoutingConfig(
+          domainStrategy: 'AsIs',
+          rules: [
+            RoutingRule(type: "field", outboundTag: "api", inboundTag: "api"),
+            ...userRoutingRules,
+            RoutingRule(
+              type: 'field',
+              domain: ['geosite:google', 'geosite:facebook', 'geosite:twitter', 'geosite:telegram'],
+              outboundTag: 'proxy',
+            ),
+            RoutingRule(
+              type: 'field',
+              ip: ['geoip:google', 'geoip:facebook', 'geoip:twitter', 'geoip:telegram'],
+              outboundTag: 'proxy',
+            ),
+            RoutingRule(type: 'field', ip: ['geoip:private', 'geoip:cn'], outboundTag: 'direct-out'),
+            RoutingRule(type: 'field', domain: ['geosite:cn'], outboundTag: 'direct-out'),
+            RoutingRule(type: 'field', port: '0-65535', outboundTag: 'proxy'),
+          ],
+        );
       }
     }
 
+    // 规则分流：内置规则（无用户自定义规则）
     return RoutingConfig(
       domainStrategy: 'AsIs',
       rules: [
         RoutingRule(type: "field", outboundTag: "api", inboundTag: "api"),
-        // 用户自定义规则（优先级高于内置）
-        ...userRoutingRules,
         // 内置代理规则
         RoutingRule(
           type: 'field',
@@ -314,5 +314,40 @@ class XrayConfigGenerator {
         RoutingRule(type: 'field', port: '0-65535', outboundTag: 'proxy'),
       ],
     );
+  }
+
+  static List<RoutingRule> _parseUserRoutingRules(List<Map<String, dynamic>> userRules) {
+    final result = <RoutingRule>[];
+    for (final rule in userRules) {
+      final entries = rule['entries'] as List<Map<String, dynamic>>? ?? [];
+      final proxyIps = <String>[];
+      final proxyDomains = <String>[];
+      final proxyProcesses = <String>[];
+      final directIps = <String>[];
+      final directDomains = <String>[];
+      final directProcesses = <String>[];
+
+      for (final entry in entries) {
+        final isProxy = (entry['action'] as String) == 'proxy';
+        final matchType = entry['match_type'] as String;
+        final value = entry['value'] as String;
+
+        if (matchType == 'appName') {
+          if (isProxy) proxyProcesses.add(value); else directProcesses.add(value);
+        } else if (matchType == 'ip') {
+          if (isProxy) proxyIps.add(value); else directIps.add(value);
+        } else {
+          if (isProxy) proxyDomains.add(value); else directDomains.add(value);
+        }
+      }
+
+      if (proxyProcesses.isNotEmpty) result.add(RoutingRule(type: 'field', process: proxyProcesses, outboundTag: 'proxy'));
+      if (proxyDomains.isNotEmpty) result.add(RoutingRule(type: 'field', domain: proxyDomains, outboundTag: 'proxy'));
+      if (proxyIps.isNotEmpty) result.add(RoutingRule(type: 'field', ip: proxyIps, outboundTag: 'proxy'));
+      if (directProcesses.isNotEmpty) result.add(RoutingRule(type: 'field', process: directProcesses, outboundTag: 'direct-out'));
+      if (directDomains.isNotEmpty) result.add(RoutingRule(type: 'field', domain: directDomains, outboundTag: 'direct-out'));
+      if (directIps.isNotEmpty) result.add(RoutingRule(type: 'field', ip: directIps, outboundTag: 'direct-out'));
+    }
+    return result;
   }
 }

@@ -285,4 +285,17 @@ class DatabaseHelper {
     }
     return result;
   }
+
+  Future<Map<String, dynamic>?> getRoutingRuleWithEntries(int ruleId) async {
+    final db = await database;
+    final rules = await db.query('routing_rules', where: 'id = ?', whereArgs: [ruleId]);
+    if (rules.isEmpty) return null;
+    final entries = await db.query(
+      'routing_entries',
+      where: 'rule_id = ?',
+      whereArgs: [ruleId],
+      orderBy: 'sort_order ASC',
+    );
+    return {...rules.first, 'entries': entries};
+  }
 }

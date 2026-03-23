@@ -10,6 +10,8 @@ enum RoutingMode {
   global,
   /// 全局直连 - 所有流量直连
   direct,
+  /// 自定义规则
+  custom,
 }
 
 /// 路由模式扩展
@@ -22,6 +24,8 @@ extension RoutingModeExtension on RoutingMode {
         return '全局代理';
       case RoutingMode.direct:
         return '全局直连';
+      case RoutingMode.custom:
+        return '自定义规则';
     }
   }
 
@@ -33,6 +37,8 @@ extension RoutingModeExtension on RoutingMode {
         return '所有流量走代理';
       case RoutingMode.direct:
         return '所有流量直连';
+      case RoutingMode.custom:
+        return '使用自定义路由规则';
     }
   }
 }
@@ -58,6 +64,7 @@ class AppSettingsManager extends ChangeNotifier {
   static const String _socksPortKey = 'socks_port';
   static const String _lastSelectedServerIdKey = 'last_selected_server_id';
   static const String _routingModeKey = 'routing_mode';
+  static const String _customRuleIdKey = 'custom_rule_id';
 
   // --- Default Values ---
   static const bool _defaultAutoStart = false;
@@ -75,6 +82,7 @@ class AppSettingsManager extends ChangeNotifier {
   int _socksPort = _defaultSocksPort;
   String? _lastSelectedServerId;
   RoutingMode _routingMode = _defaultRoutingMode;
+  int? _customRuleId;
 
   // --- Getters ---
   bool get autoStart => _autoStart;
@@ -84,6 +92,7 @@ class AppSettingsManager extends ChangeNotifier {
   int get socksPort => _socksPort;
   String? get lastSelectedServerId => _lastSelectedServerId;
   RoutingMode get routingMode => _routingMode;
+  int? get customRuleId => _customRuleId;
 
   // --- Loading ---
   Future<void> _loadSettings() async {
@@ -99,6 +108,7 @@ class AppSettingsManager extends ChangeNotifier {
       if (routingModeIndex != null && routingModeIndex >= 0 && routingModeIndex < RoutingMode.values.length) {
         _routingMode = RoutingMode.values[routingModeIndex];
       }
+      _customRuleId = prefs.getInt(_customRuleIdKey);
       notifyListeners();
     } catch (e) {
       debugPrint('Failed to load settings: $e');
@@ -155,6 +165,14 @@ class AppSettingsManager extends ChangeNotifier {
     _routingMode = value;
     notifyListeners();
     await _saveInt(_routingModeKey, value.index);
+  }
+
+  Future<void> setCustomRule(int ruleId) async {
+    _customRuleId = ruleId;
+    _routingMode = RoutingMode.custom;
+    notifyListeners();
+    await _saveInt(_customRuleIdKey, ruleId);
+    await _saveInt(_routingModeKey, RoutingMode.custom.index);
   }
 
   // --- Private Helpers ---
